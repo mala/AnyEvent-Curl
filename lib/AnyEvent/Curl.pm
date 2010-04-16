@@ -40,7 +40,7 @@ sub setopt {
     my ($key, $value) = @_;
     $key = "CURLOPT_" . uc $key;
     croak "Unknown option: $key" unless WWW::Curl::Easy->can($key);
-    $self->{options}->{$key} = $value;
+    $self->{options}->{WWW::Curl::Easy->$key} = $value;
 }
 
 sub default_options {
@@ -87,7 +87,7 @@ sub add {
     # setup common options 
     my $options = $self->{options};
     for (keys %{ $options }) {
-        $curl->setopt(WWW::Curl::Easy->$_ => $options->{$_});
+        $curl->setopt($_ => $options->{$_});
     }
     # setup request options
     if ($opt && ref $opt) {

@@ -18,7 +18,7 @@ sub new {
 
 # we know some method
 sub code { $_[0]->{rc} }
-sub content { $_[0]->{body} }
+sub content { ${ $_[0]->{body} } }
 sub is_info     { HTTP::Status::is_info     (shift->{'rc'}); }
 sub is_success  { HTTP::Status::is_success  (shift->{'rc'}); }
 sub is_redirect { HTTP::Status::is_redirect (shift->{'rc'}); }

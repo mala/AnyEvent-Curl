@@ -49,9 +49,17 @@ sub default_options {
     }
 }
 
+sub _setopt {
+    my $curl = shift;
+    my ($key, $value) = @_;
+    $key = "CURLOPT_" . uc $key;
+    croak "Unknown option: $key" unless WWW::Curl::Easy->can($key);
+    $curl->setopt(WWW::Curl::Easy->$key, $value);
+}
+
 sub add {
     my $self = shift;
-    my ($req, $cb) = @_;
+    my ($req, $cb, $opt) = @_;
 
     my $id = $self->gen_id;
     my $curl = WWW::Curl::Easy->new;
@@ -74,10 +82,17 @@ sub add {
     # use PerlIO
     if (open my $fh, ">", \$body) { $curl->setopt(CURLOPT_WRITEDATA, $fh) }
     if (open my $fh, ">", \$head) { $curl->setopt(CURLOPT_WRITEHEADER, $fh) }
-    
+   
+    # setup common options 
     my $options = $self->{options};
     for (keys %{ $options }) {
-        $curl->setopt($_ => $options->{$_});
+        $curl->setopt(WWW::Curl::Easy->$_ => $options->{$_});
+    }
+    # setup request options
+    if ($opt && ref $opt) {
+        for (keys %{$opt}) {
+            _setopt($curl, $_, $opt->{$_})
+        }
     }
 
     my $cv = AE::cv;
@@ -97,7 +112,7 @@ sub add {
 
 sub start {
     my $self = shift;
-    my $cv = $self->{cv} = AE::cv;
+    my $cv = $self->{cv} ||= AE::cv;
     $self->check_fh;
     $cv;
 }

@@ -10,6 +10,7 @@ use WWW::Curl::Easy;
 use WWW::Curl::Multi;
 use AnyEvent::Curl::Response;
 use Data::Dumper;
+# use Time::HiRes qw(gettimeofday tv_interval);
 
 sub new {
     my $class = shift;
@@ -107,36 +108,47 @@ sub add {
     };
     $self->{active}++;
     $self->{curlm}->add_handle($curl);
+
+    if ($self->{start}) {
+        $self->start
+    }
     return $cv;
 }
 
 sub start {
     my $self = shift;
-    my $cv = $self->{cv} ||= AE::cv;
-    $self->check_fh;
-    $cv;
+    $self->{start} = 1;
+    $self->{check_fh_timer} = AE::timer 0, 0.5, sub { $self->check_fh };
+    if (!$self->{cv}) {
+        my $cv = $self->{cv} = AE::cv;
+        # $self->check_fh;
+        return $cv;
+    }
+    $self->{cv};
 }
 
 sub wait {
     my $self = shift;
     $self->start unless $self->{cv};
     $self->{cv}->wait;
+    delete $self->{cv};
+    1;
 }
 
 sub check_fh {
     my $self = shift;
     my $curlm = $self->{curlm};
     $curlm->perform;
-
+    
     # warn Dumper $curlm->fdset;
     my ($rio, $wio, $eio) = $curlm->fdset;
-   
+ 
     $self->_watch($rio, "read");
     $self->_watch($wio, "write");
-
+    
     if (@{$rio} == 0 && @{$wio} == 0) {
         my $remain = $self->on_progress;
-        $self->{cv}->send;
+        $self->_all_task_done;
     }
 }
 
@@ -154,7 +166,7 @@ sub _watch {
     for (@{$fd_ref}) {
         $w->{$_} ||= AE::io $_, $rw, sub {
             my $remain = $self->on_progress;
-            $self->{cv}->send unless $remain;
+            $self->_all_task_done unless $remain;
         };
     }
 }
@@ -162,7 +174,9 @@ sub _watch {
 sub on_progress {
     my $self = shift;
     my $curlm = $self->{curlm};
+    
     my $active = $curlm->perform;
+
     if ( $active != $self->{active} ) {
         while ( my ( $id, $rval ) = $curlm->info_read ) {
             $self->_complete($id) if ($id);
@@ -184,6 +198,14 @@ sub _complete {
     delete $self->{result}->{$id};
 }
 
+sub _all_task_done {
+    my $self = shift;
+    if ($self->{cv}) {
+        $self->{cv}->send(1);
+        delete $self->{cv};
+    }
+}
+
 1;
 
 __END__
@@ -200,7 +222,7 @@ AnyEvent::Curl - faster non-blocking http client
   for (1..10) {
       my $cv = $curl->add($request, $callback); # $request is URL or HTTP::Request object
       # my $res = $cv->recv; # wait one request
-      # $cv->callback(sub { ... });
+      # $cv->callback(sub { ... }); # use AE::cv 
   }
   warn $curl->active; # check active
   $cv->wait; # wait all request

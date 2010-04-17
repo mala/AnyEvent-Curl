@@ -29,11 +29,11 @@ sub test_psgi {
             my $port = shift;
             $ua->start;
             my $cb   = sub {
-                my $req = shift;
+                my ($req, $cb, $curlopt) = @_;
                 $req->uri->scheme('http');
                 $req->uri->host( $args{host} || '127.0.0.1' );
                 $req->uri->port($port);
-                return $ua->add($req);
+                return $ua->add($req, $cb, $curlopt);
             };
             $client->($cb);
         },

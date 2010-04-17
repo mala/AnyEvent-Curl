@@ -68,8 +68,16 @@ sub add {
     my $url;
     if (ref $req && $req->isa('HTTP::Request')) {
         $url = $req->uri;
-        my $head = $req->headers->as_string;
-        $curl->setopt( CURLOPT_HTTPHEADER, [$head]);
+        my $head = [ split "\n", $req->headers->as_string ];
+        # warn Dumper $head;
+        $curl->setopt( CURLOPT_CUSTOMREQUEST, $req->method);
+        $curl->setopt( CURLOPT_HTTPHEADER, $head);
+        if ($req->content){
+            my $post = $req->content;
+            # warn length $post;
+            _setopt($curl, postfields => $post);
+            _setopt($curl, postfieldsize => length $post);
+        }
     } else {
         $url = $req;
     }
@@ -129,7 +137,7 @@ sub start {
 
 sub wait {
     my $self = shift;
-    $self->start unless $self->{cv};
+    $self->start unless $self->{start};
     $self->{cv}->wait;
     delete $self->{cv};
     1;

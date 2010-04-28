@@ -5,14 +5,49 @@ use warnings;
 use Guard;
 use AnyEvent::Curl;
 use base qw(LWP::UserAgent);
+use Data::Dumper;
+
+our $RUN_HANDLER = 1;
 
 sub request {
     my($self, $request, $arg, $size, $previous) = @_;
     warn "use Curl";
+    my $ua = $self;
+    # set headers, useragent etc. 
+    $ua->prepare_request($request);
+    $ua->timeout;
+    warn Dumper $self;
+    warn Dumper $request;
+    
     my $curl = AnyEvent::Curl->new;
+    $curl->setopt(timeout => $self->timeout);
+
     my $cv = $curl->add($request);
     $curl->start;
-    $cv->recv;
+    my $res = $cv->recv;
+
+    if ($RUN_HANDLER) {
+        my %skip_h;
+        my $response = $res->http_response;
+        $ua->run_handlers( "response_header", $response );
+
+        for my $h ( $ua->handlers( "response_data", $response ) ) {
+            next if $skip_h{$h};
+            unless (
+                $h->{callback}->( $response, $ua, $h, $response->content ) )
+            {
+                $skip_h{$h}++;
+            }
+        }
+        delete $response->{handlers}{response_data};
+        delete $response->{handlers} unless %{ $response->{handlers} };
+
+        $ua->run_handlers( "response_done", $response );
+        return $response;
+    }
+    else {
+        return $res;
+    }
 }
 
 sub replace_original {

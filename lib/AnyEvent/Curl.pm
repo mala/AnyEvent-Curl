@@ -126,10 +126,9 @@ sub add {
 sub start {
     my $self = shift;
     $self->{start} = 1;
-    $self->{check_fh_timer} = AE::timer 0, 0.5, sub { $self->check_fh };
+    $self->{check_fh_timer} = AE::timer 0, 0.5, sub { $self->check_fh(1) };
     if (!$self->{cv}) {
         my $cv = $self->{cv} = AE::cv;
-        # $self->check_fh;
         return $cv;
     }
     $self->{cv};
@@ -145,15 +144,20 @@ sub wait {
 
 sub check_fh {
     my $self = shift;
+    my $perform = shift;
+    # warn "check fh";
     my $curlm = $self->{curlm};
-    $curlm->perform;
     
+    $curlm->perform if $perform;
+    # $curlm->perform;
+    # warn "perform";
     # warn Dumper $curlm->fdset;
+
     my ($rio, $wio, $eio) = $curlm->fdset;
- 
+
     $self->_watch($rio, "read");
     $self->_watch($wio, "write");
-    
+
     if (@{$rio} == 0 && @{$wio} == 0) {
         my $remain = $self->on_progress;
         $self->_all_task_done;
@@ -162,29 +166,28 @@ sub check_fh {
 
 sub _watch {
     my ($self, $fd_ref, $type) = @_;
-
-    my %exists = map { ($_ => 1) } @{$fd_ref};
-    my $w = $self->{$type . "_io"};
+    my $new_io = {};
+    my $key = $type . "_io";
+    my $w = $self->{$key};
     my $rw = ($type eq "read") ? 0 : 1;
-
-    # unwatch finished io
-    for (keys %{$w}){ $exists{$_} or delete $w->{$_} }
-
     # watch io by AE
+    my $cb = $self->{__io_cb} ||=  sub {
+        my $remain = $self->on_progress;
+        $self->_all_task_done unless $remain;
+    };
     for (@{$fd_ref}) {
-        $w->{$_} ||= AE::io $_, $rw, sub {
-            my $remain = $self->on_progress;
-            $self->_all_task_done unless $remain;
-        };
+        $new_io->{$_} = $w->{$_} || AE::io $_, $rw, $cb;
     }
+    $self->{$key} = $new_io;
 }
 
 sub on_progress {
     my $self = shift;
+    # warn "progress";
     my $curlm = $self->{curlm};
-    
     my $active = $curlm->perform;
 
+    # warn "perform";
     if ( $active != $self->{active} ) {
         while ( my ( $id, $rval ) = $curlm->info_read ) {
             $self->_complete($id) if ($id);

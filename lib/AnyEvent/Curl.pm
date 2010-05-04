@@ -14,6 +14,7 @@ use Data::Dumper;
 
 sub new {
     my $class = shift;
+    my %config = @_;
     my $curlm = WWW::Curl::Multi->new;
     my $self = {
         req_id => 1,
@@ -22,9 +23,13 @@ sub new {
         result => {},
         read_io => {},
         write_io => {},
+        # curl options
         options => $class->default_options,
     };
     # $self->{w} = AE::timer 0, 1, sub { warn Dumper $self->{watch} };
+    $self->{queue} = []; 
+    $self->{config} = {};
+    $self->{config}->{max_parallel} = delete $config{max_parallel} || 1000;
     bless $self, $class;
 }
 
@@ -50,12 +55,19 @@ sub default_options {
     }
 }
 
+my %CONST_CACHE;
+
+sub c($) {
+    my $key = shift;
+    $CONST_CACHE{$key} ||= WWW::Curl::Easy->$key;
+}
+
 sub _setopt {
     my $curl = shift;
     my ($key, $value) = @_;
     $key = "CURLOPT_" . uc $key;
     croak "Unknown option: $key" unless WWW::Curl::Easy->can($key);
-    $curl->setopt(WWW::Curl::Easy->$key, $value);
+    $curl->setopt(c($key), $value);
 }
 
 sub add {
@@ -70,8 +82,8 @@ sub add {
         $url = $req->uri;
         my $head = [ split "\n", $req->headers->as_string ];
         # warn Dumper $head;
-        $curl->setopt( CURLOPT_CUSTOMREQUEST, $req->method);
-        $curl->setopt( CURLOPT_HTTPHEADER, $head);
+        $curl->setopt( c("CURLOPT_CUSTOMREQUEST"), $req->method);
+        $curl->setopt( c("CURLOPT_HTTPHEADER"), $head);
         if ($req->content){
             my $post = $req->content;
             # warn length $post;
@@ -82,16 +94,17 @@ sub add {
         $url = $req;
     }
     
-    $curl->setopt( CURLOPT_URL, $url );
-    $curl->setopt( CURLOPT_PRIVATE, $id );
+    $curl->setopt(c("CURLOPT_URL"), $url );
+    $curl->setopt(c("CURLOPT_PRIVATE"), $id );
 
     my $body = "";
     my $head = "";
 
     # use PerlIO
-    if (open my $fh, ">", \$body) { $curl->setopt(CURLOPT_WRITEDATA, $fh) }
-    if (open my $fh, ">", \$head) { $curl->setopt(CURLOPT_WRITEHEADER, $fh) }
-   
+    if (open my $fh, ">", \$body) { $curl->setopt(c("CURLOPT_WRITEDATA"), $fh) }
+    if (open my $fh, ">", \$head) { $curl->setopt(c("CURLOPT_WRITEHEADER"), $fh) }
+    # $curl->setopt(c("CURLOPT_HEADERFUNCTION"), sub { $head .= $_[0]; 1 }); # Slow
+
     # setup common options 
     my $options = $self->{options};
     for (keys %{ $options }) {
@@ -114,13 +127,27 @@ sub add {
         cb     => $cb,
         cv     => $cv,
     };
-    $self->{active}++;
-    $self->{curlm}->add_handle($curl);
+
+    if ($self->active >= $self->{config}->{max_parallel}) {
+        push @{$self->{queue}}, $curl;
+    } else {
+        $self->{active}++;
+        $self->{curlm}->add_handle($curl);
+    }
 
     if ($self->{start}) {
         $self->start
     }
     return $cv;
+}
+
+sub dequeue {
+    my $self = shift;
+    if (my $curl = shift @{$self->{queue}}) {
+        # warn "dequeue";
+        $self->{active}++;
+        $self->{curlm}->add_handle($curl);
+    }
 }
 
 sub start {
@@ -145,22 +172,26 @@ sub wait {
 sub check_fh {
     my $self = shift;
     my $perform = shift;
-    # warn "check fh";
     my $curlm = $self->{curlm};
-    
     $curlm->perform if $perform;
-    # $curlm->perform;
-    # warn "perform";
-    # warn Dumper $curlm->fdset;
-
     my ($rio, $wio, $eio) = $curlm->fdset;
-
+    
     $self->_watch($rio, "read");
     $self->_watch($wio, "write");
 
     if (@{$rio} == 0 && @{$wio} == 0) {
-        my $remain = $self->on_progress;
-        $self->_all_task_done;
+        # read last response
+        if ($perform) { $self->on_progress }
+        # there is active request, but no fdset alivable, set wait timer
+        if ($self->{active}) {
+            # warn "add wait";
+            $self->{check_fh_timer2} = AE::timer 0, 0, sub {
+                $self->on_progress;
+            };
+        } else {
+            # complete all request
+            $self->_all_task_done;
+        }
     }
 }
 
@@ -194,19 +225,20 @@ sub on_progress {
         }
         $self->check_fh;
     }
-    $active;
+    $self->{active};
 }
 
 sub _complete {
     my ($self, $id) = @_;
     $self->{active}--;
     my $res = $self->{result}->{$id};
-    $res->{rc} = $res->{curl}->getinfo(CURLINFO_HTTP_CODE);
-    
+    $res->{rc} = $res->{curl}->getinfo(c("CURLINFO_HTTP_CODE"));
+    $res->{redirect} = $res->{curl}->getinfo(c("CURLINFO_REDIRECT_COUNT"));
     my $response = AnyEvent::Curl::Response->new($res);
     $res->{cb}->($response);
     $res->{cv}->send($response);
     delete $self->{result}->{$id};
+    $self->dequeue;
 }
 
 sub _all_task_done {
@@ -215,6 +247,30 @@ sub _all_task_done {
         $self->{cv}->send(1);
         delete $self->{cv};
     }
+}
+
+sub clone {
+    my $self = shift;
+    my $class = ref $self;
+    my $clone = $class->new;
+    $clone->{options} = +{ %{$self->{options}} };
+    $clone;
+}
+
+sub STORABLE_freeze {
+    my $self = shift;
+    my $class = ref $self;
+    my $clone = $self->clone;
+    delete $clone->{curlm};
+    return ($class, +{ %{$clone} });
+}
+
+sub STORABLE_thaw {
+    my ($self, $clone, $string, $refs) = @_;
+    for (keys %{$refs}) {
+        $self->{$_} = $refs->{$_}
+    }
+    $self->{curlm} = WWW::Curl::Multi->new;
 }
 
 1;

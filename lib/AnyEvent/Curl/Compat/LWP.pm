@@ -6,6 +6,7 @@ use Guard;
 use AnyEvent::Curl;
 use base qw(LWP::UserAgent);
 use Data::Dumper;
+use HTTP::Response::Parser;
 
 our $RUN_HANDLERS = 1;
 our $CURL;
@@ -35,51 +36,6 @@ sub __curl_send_request {
     my $res = $cv->recv;
 }
 
-# header parser
-sub __incr_parser {
-    my $res = shift;
-    $res->{_content} = "";
-    my %head;
-    my $status_line;
-    my $last_line = "";
-
-    return sub {
-        my $str = $_[0];
-        my $l = length $str;
-        $str =~s/\r?\n$//;
-        unless ($status_line) {
-            $status_line = 1;
-            my @p = split ' ', $str;
-            $res->{_protocol} = shift @p if @p == 3;
-            $res->{_rc} = shift @p; 
-            $res->{_msg} = shift @p;
-            return $l;
-        }
-        if ( ord($str) == 9 || ord($str) == 32 ) {
-            $last_line .= $str;
-            return $l;
-        }
-        my ($field, $value) = split /[ \t]*: ?/, $last_line, 2;
-        if ( defined $field ) {
-            my $f = lc $field;
-            if ( defined $head{$f} ) {
-                my $h = $head{$f};
-                ref($h) eq 'ARRAY'
-                  ? push( @$h, $value )
-                  : ( $head{$f} = [ $h, $value ] );
-            }
-            else { $head{$f} = $value }
-        }
-        # warn $last_line;
-        $last_line = $str;
-        if ($str eq "") {
-            $res->{_headers} = bless \%head, 'HTTP::Headers';
-            bless $res, 'HTTP::Response';
-        }
-        $l;
-    }
-}
-
 sub simple_request {
     my($self, $request, $arg, $size) = @_;
     my $ua = $self;
@@ -103,14 +59,13 @@ sub simple_request {
 
     my %options;
     my $res = {};
-    if ($run_handler) {
-        my $header = "";
-        my $parser = __incr_parser($res);
-        $options{headerfunction} = $parser;
-    }
-
     my $ae_res = __curl_send_request($self, $request, \%options);
-    return $ae_res unless $run_handler;
+    return $ae_res->http_response unless $run_handler;
+
+    HTTP::Response::Parser::parse_http_response( ${ $ae_res->{header} }, $res );
+    $res->{_content} = "";
+    bless $res->{_headers}, 'HTTP::Headers';
+    bless $res, 'HTTP::Response';
 
     my $called = 0;
     LWP::Protocol::create("http", $ua)->collect($arg, $res, sub { ($called++) ? \"" : $ae_res->{body} });

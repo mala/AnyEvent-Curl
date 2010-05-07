@@ -298,7 +298,7 @@ AnyEvent::Curl - faster non-blocking http client
 
 AnyEvent::Curl is wrapper for WWW::Curl using AnyEvent.
 
-5x faster than LWP. Just a primitive interface for speed.
+5-10x faster than LWP. Just a primitive interface for speed.
 
 =head1 METHODS
 

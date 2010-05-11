@@ -221,7 +221,7 @@ sub on_progress {
     # warn "perform";
     if ( $active != $self->{active} ) {
         while ( my ( $id, $rval ) = $curlm->info_read ) {
-            $self->_complete($id) if ($id);
+            $self->_complete($id, $rval) if ($id);
         }
         $self->check_fh;
     }
@@ -229,11 +229,13 @@ sub on_progress {
 }
 
 sub _complete {
-    my ($self, $id) = @_;
+    my ($self, $id, $rval) = @_;
     $self->{active}--;
     my $res = $self->{result}->{$id};
-    $res->{rc} = $res->{curl}->getinfo(c("CURLINFO_HTTP_CODE"));
-    $res->{redirect} = $res->{curl}->getinfo(c("CURLINFO_REDIRECT_COUNT"));
+    my $curl = $res->{curl};
+    $res->{rc} = $curl->getinfo(c("CURLINFO_HTTP_CODE"));
+    $res->{redirect} = $curl->getinfo(c("CURLINFO_REDIRECT_COUNT"));
+    $res->{error} = $curl->strerror($rval) if $rval;
     my $response = AnyEvent::Curl::Response->new($res);
     $res->{cb}->($response);
     $res->{cv}->send($response);

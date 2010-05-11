@@ -13,7 +13,7 @@ sub new {
     my %r;
     map {
         $r{$_} = $r->{$_};
-    } qw(rc body header request redirect);
+    } qw(rc body header request redirect error);
     return bless \%r, $class;
 }
 
@@ -37,16 +37,24 @@ sub to_http_response {
     # if follow redirect, multiple headers
     if ($self->{redirect}) {
         my @headers = reverse split($CRLF x 2, ${ $self->{header} });
-        my $header = shift @headers;
-        $res = _parse($header, ${$self->{body}});
+        if ($self->{error}) {
+            $res = _parse("HTTP/1.0 500 INTERNAL ERROR\r\n\r\n", $self->{error});
+        } else {
+            my $header = shift @headers;
+            $res = _parse($header . $CRLF x 2, ${$self->{body}});
+        }
         my $current = $res;
         while (my $h = shift @headers) {
-            my $pre = _parse($h, "");
+            my $pre = _parse($h . $CRLF x 2, "");
             $current->previous($pre, "");
             $current = $pre;
         }
     } else {
-        $res = _parse(${$self->{header}}, ${$self->{body}});
+        if ($self->{error}) {
+            $res = _parse("HTTP/1.0 500 INTERNAL ERROR\r\n\r\n", $self->{error});
+        } else {
+            $res = _parse(${$self->{header}}, ${$self->{body}});
+        }
     }
     if (ref $self->{request}) {
         $res->request($self->{request});

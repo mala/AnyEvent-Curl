@@ -58,23 +58,36 @@ sub simple_request {
     }
 
     my %options;
-    my $res = {};
-    my $ae_res = __curl_send_request($self, $request, \%options);
+    my $ae_res = __curl_send_request( $self, $request, \%options );
     return $ae_res->http_response unless $run_handler;
 
-    HTTP::Response::Parser::parse_http_response( ${ $ae_res->{header} }, $res );
-    $res->{_content} = "";
-    bless $res->{_headers}, 'HTTP::Headers';
-    bless $res, 'HTTP::Response';
+    if ( $ae_res->{error} ) {
+        my $res = _new_response( $request, 500, $ae_res->{error} );
+        $ua->run_handlers( "response_done", $res );
+        return $res;
+    }
+    else {
+        my $res = HTTP::Response::Parser::parse( ${ $ae_res->{header} }, "" );
+        my $called = 0;
+        LWP::Protocol::create( "http", $ua )
+          ->collect( $arg, $res,
+            sub { ( $called++ ) ? \"" : $ae_res->{body} } );
+        $res->request($request);    # record request for reference
+        $res->header( "Client-Date" => HTTP::Date::time2str(time) );
+        $ua->run_handlers( "response_done", $res );
+        return $res;
+    }
+}
 
-    my $called = 0;
-    LWP::Protocol::create("http", $ua)->collect($arg, $res, sub { ($called++) ? \"" : $ae_res->{body} });
-
-    $res->request($request);  # record request for reference
-    $res->header("Client-Date" => HTTP::Date::time2str(time));
-    $ua->run_handlers( "response_done", $res );
-
-    return $res;
+sub _new_response {
+    my ( $request, $code, $message ) = @_;
+    my $response = HTTP::Response->new( $code, $message );
+    $response->request($request);
+    $response->header( "Client-Date"    => HTTP::Date::time2str(time) );
+    $response->header( "Client-Warning" => "Internal response" );
+    $response->header( "Content-Type"   => "text/plain" );
+    $response->content("$code $message\n");
+    return $response;
 }
 
 sub replace_original {

@@ -11,10 +11,8 @@ my $CRLF = "\015\012";
 sub new {
     my ($class, $r) = @_;
     my %r;
-    map {
-        $r{$_} = $r->{$_};
-    } qw(rc body header request redirect error);
-    return bless \%r, $class;
+    map { $r{$_} = $r->{$_} } qw(rc body header request redirect error);
+    bless \%r, $class;
 }
 
 # we know some method
@@ -78,4 +76,68 @@ sub DESTROY {}
 
 1;
 
+=head1 NAME
+
+AnyEvent::Curl::Response - response object for AnyEvent::Curl
+
+=head1 SYNOPSIS
+
+ use AnyEvent::Curl;
+ my $curl = AnyEvent::Curl->new;
+ my $cv = $curl->add($request, $callback);
+ $curl->start;
+ my $res = $cv->recv; # wait one request
+ if ($r->is_success) {
+     # Get HTTP::Response
+     my $res = $r->http_response;
+     $res->content_type;
+     $res->last_modified;
+ } else {
+     warn $r->code;
+ }
+
+=head1 DESCRIPTION
+
+AnyEvent::Curl::Response is response object for AnyEvent::Curl. 
+
+It has a minimum function, less memory usage. 
+
+=head1 METHODS
+
+=head2 code
+
+Return status code. If client caught some error, return 500.
+
+=head2 content
+
+Return content body. Read only.
+
+=head2 is_info, is_success, is_redirect, is_error
+
+Return true if status code is 1xx, 2xx, 3xx, 4xx or 5xx.
+
+=head2 http_response
+
+Create HTTP::Response object by L<HTTP::Response::Parser>.
+
+If you want just a content body or status code, you shoud not call this method.
+
+=head2 other method
+
+Create HTTP::Response object and delegate to it. $r->header() means $r->http_response->header().
+
+=head1 AUTHOR
+
+mala E<lt>cpan@ma.laE<gt>
+
+=head1 SEE ALSO
+
+L<WWW::Curl>, L<HTTP::Response>, L<HTTP::Response::Parser>
+
+=head1 LICENSE
+
+This library is free software; you can redistribute it and/or modify
+it under the same terms as Perl itself.
+
+=cut
 
